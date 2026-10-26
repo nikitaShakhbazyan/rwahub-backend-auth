@@ -1,62 +1,87 @@
-const jwt = require('jsonwebtoken');
+const { verifyToken } = require('../services/identity');
 
-function getJwtSecret() {
-  const secret = process.env.JWT_SECRET;
-  if (!secret || secret === 'fallback-secret') {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('JWT_SECRET must be configured');
-    }
-    return 'dev-only-insecure-secret';
+/**
+ * Pulls a bearer token off the request. Returns null when the header is absent
+ * or malformed, so "no credentials" and "bad credentials" stay distinguishable.
+ */
+function extractBearerToken(req) {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader || typeof authHeader !== 'string') {
+    return null;
   }
-  return secret;
+
+  const [scheme, token] = authHeader.split(' ');
+  if (!/^Bearer$/i.test(scheme) || !token) {
+    return null;
+  }
+  return token.trim() || null;
 }
 
+/**
+ * Hard gate. No valid token means the request never reaches the handler, so a
+ * protected route can treat `req.user` as guaranteed to exist.
+ *
+ * 401 for "you are not authenticated" (missing, invalid, or expired token);
+ * 403 is reserved for "authenticated but not allowed" (see requireRole).
+ */
 const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+  const token = extractBearerToken(req);
 
   if (!token) {
-    return res.status(401).json({ error: 'Access token required' });
+    return res.status(401).json({
+      error: 'Authentication required',
+      code: 'AUTH_REQUIRED',
+    });
   }
 
-  jwt.verify(token, getJwtSecret(), (err, user) => {
-    if (err) {
-      return res.status(403).json({ error: 'Invalid or expired token' });
-    }
-    req.user = user;
-    next();
-  });
+  try {
+    req.user = verifyToken(token);
+    return next();
+  } catch (err) {
+    const expired = err && err.name === 'TokenExpiredError';
+    return res.status(401).json({
+      error: expired ? 'Token expired' : 'Invalid token',
+      code: expired ? 'TOKEN_EXPIRED' : 'TOKEN_INVALID',
+    });
+  }
 };
 
+/**
+ * Soft gate for public reads that render differently when signed in.
+ * Never rejects — it only attaches `req.user` when a token checks out.
+ */
 const optionalAuth = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
+  const token = extractBearerToken(req);
   if (!token) {
     return next();
   }
 
-  jwt.verify(token, getJwtSecret(), (err, user) => {
-    if (!err) {
-      req.user = user;
-    }
-    next();
-  });
+  try {
+    req.user = verifyToken(token);
+  } catch {
+    // An unusable token on a public route is simply treated as anonymous.
+  }
+  return next();
 };
 
 // Role-based authorization middleware
 const requireRole = (roles) => {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({ error: 'Authentication required' });
+      return res.status(401).json({
+        error: 'Authentication required',
+        code: 'AUTH_REQUIRED',
+      });
     }
 
-    // In a real app, you would check user roles from database
     const userRoles = req.user.roles || ['buyer'];
     const hasRequiredRole = roles.some(role => userRoles.includes(role));
 
     if (!hasRequiredRole) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
+      return res.status(403).json({
+        error: 'Insufficient permissions',
+        code: 'FORBIDDEN',
+      });
     }
 
     next();
@@ -208,6 +233,7 @@ const securityHeaders = (req, res, next) => {
 };
 
 module.exports = {
+  extractBearerToken,
   authenticateToken,
   optionalAuth,
   requireRole,

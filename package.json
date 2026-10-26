@@ -10,7 +10,8 @@
     "build": "node scripts/require-env.js && vite build",
     "compile": "hardhat compile",
     "chain": "hardhat node",
-    "deploy:local": "hardhat run scripts/deploy.js --network localhost"
+    "deploy:local": "hardhat run scripts/deploy.js --network localhost",
+    "test": "NODE_ENV=test jest --forceExit"
   },
   "dependencies": {
     "@headlessui/react": "^1.7.18",

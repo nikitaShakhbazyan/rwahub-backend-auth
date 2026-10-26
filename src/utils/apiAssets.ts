@@ -1,4 +1,18 @@
 import { API_BASE_URL } from '@/utils/apiBase';
+import { authHeaders } from '@/utils/authToken';
+
+/** An API failure that keeps the HTTP status, so callers can react to a 401. */
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+  }
+}
 
 export function normalizeAsset(raw: any) {
   const priceAmount = Number(raw?.price?.amount ?? raw?.value ?? 0);
@@ -56,20 +70,26 @@ export async function createAssetOnApi(asset: any) {
       ? asset.imageUrl
       : 'https://images.pexels.com/photos/9978722/pexels-photo-9978722.jpeg',
     images: Array.isArray(asset.images) ? asset.images.filter((url: string) => typeof url === 'string' && url.startsWith('http')) : [],
-    owner: asset.owner,
-    status: asset.status,
-    isVerified: asset.isVerified,
     tokenId: asset.tokenId,
     value: asset.value ?? asset.price?.amount,
   };
 
   const response = await fetch(`${API_BASE_URL}/assets`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    // The server derives the owner from this token. Note that `owner` is no
+    // longer sent: the API ignores it, and sending it would imply otherwise.
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(payload),
   });
+
   if (!response.ok) {
-    throw new Error('Failed to create asset');
+    const body = await response.json().catch(() => null);
+    throw new ApiError(
+      body?.error || 'Failed to create asset',
+      response.status,
+      body?.code
+    );
   }
+
   return normalizeAsset(await response.json());
 }

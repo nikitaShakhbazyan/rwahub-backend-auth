@@ -606,6 +606,78 @@ class MockDatabase {
     this.validationRequests.set(id, updatedRequest);
     return updatedRequest;
   }
+
+  // User methods
+  getUserById(id) {
+    return this.users.get(id) || null;
+  }
+
+  getUserByEmail(email) {
+    if (!email) return null;
+    const needle = String(email).toLowerCase();
+    return Array.from(this.users.values())
+      .find(user => String(user.email || '').toLowerCase() === needle) || null;
+  }
+
+  getUserByWalletAddress(address) {
+    if (!address) return null;
+    const needle = String(address).toLowerCase();
+    return Array.from(this.users.values())
+      .find(user => String(user.wallet && user.wallet.address || '').toLowerCase() === needle) || null;
+  }
+
+  createUser(userData) {
+    const user = {
+      ...userData,
+      createdAt: userData.createdAt || new Date(),
+      updatedAt: new Date(),
+    };
+    this.users.set(user.id, user);
+    return user;
+  }
+
+  updateUser(id, updateData) {
+    const user = this.users.get(id);
+    if (!user) return null;
+
+    const updatedUser = {
+      ...user,
+      ...updateData,
+      id: user.id,
+      updatedAt: new Date(),
+    };
+    this.users.set(id, updatedUser);
+    return updatedUser;
+  }
+
+  /**
+   * Find-or-create for wallet sign-in. A first-time wallet becomes a real user
+   * record, so a wallet identity is a first-class account rather than a
+   * throwaway token subject.
+   */
+  findOrCreateWalletUser(address) {
+    const normalized = String(address).toLowerCase();
+    const existing = this.getUserByWalletAddress(normalized);
+    if (existing) return existing;
+
+    return this.createUser({
+      id: `user_wallet_${normalized.slice(2, 10)}_${Date.now()}`,
+      email: null,
+      name: `${normalized.slice(0, 6)}\u2026${normalized.slice(-4)}`,
+      provider: 'wallet',
+      roles: ['buyer', 'seller'],
+      kyc: { status: 'pending', documents: {} },
+      wallet: { address: normalized, balance: 0, currency: 'USDT' },
+      stats: {
+        assetsListed: 0,
+        assetsSold: 0,
+        assetsBought: 0,
+        totalValue: 0,
+        rating: 0,
+        reviews: 0,
+      },
+    });
+  }
 }
 
 module.exports = new MockDatabase();

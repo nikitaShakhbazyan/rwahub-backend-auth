@@ -12,6 +12,8 @@ import { useValidatorStore } from '@/store/validatorStore';
 import { useAuthStore } from '@/store/authStore';
 import { AssetCategory } from '@/types';
 import { createAssetOnChain, isOnChainConfigured } from '@/utils/onchain';
+import { ApiError } from '@/utils/apiAssets';
+import { getApiToken } from '@/utils/authToken';
 
 interface FormData {
   title: string;
@@ -38,6 +40,7 @@ const initialFormData: FormData = {
 export default function TokenizePage() {
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState<FormData>(initialFormData);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const navigate = useNavigate();
   const { addNotification } = useNotificationStore();
   const { uploadAssetsCreation, loading: ipfsLoading } = useIPFSUpload();
@@ -50,6 +53,9 @@ export default function TokenizePage() {
   }, [fetchValidators]);
   const pinataEnabled = Boolean(import.meta.env.VITE_PINATA_JWT);
   const onChain = isOnChainConfigured();
+  // Reflects whether this browser holds a JWT, i.e. whether the API will
+  // accept a create-asset request at all.
+  const hasApiToken = Boolean(getApiToken());
 
   const {
     getRootProps: getImageRootProps,
@@ -85,6 +91,7 @@ export default function TokenizePage() {
   const handleSubmit = async () => {
     try {
       setStep(3); // Ensure we're on the final step
+      setSubmitError(null);
       
       // Show loading notification
       toast.loading(onChain ? 'Submitting asset on-chain...' : 'Saving demo asset...', {
@@ -113,7 +120,9 @@ export default function TokenizePage() {
         }
       }
 
-      addAsset({
+      // Awaited: the API call must be allowed to fail loudly here, otherwise a
+      // 401 would be swallowed and the user would see a false success.
+      await addAsset({
         id: `user-${Date.now()}`,
         title: formData.title || 'Untitled asset',
         description: formData.description || 'No description',
@@ -157,16 +166,26 @@ export default function TokenizePage() {
       navigate('/dashboard');
     } catch (error) {
       console.error('Submission error:', error);
-      
-      // Show error notification
-      toast.error('Failed to upload asset', {
+
+      // A 401 is not a generic failure: the API refused because the request
+      // carried no valid identity. Say that, so the gap is visible in the UI.
+      const status = (error as ApiError)?.status;
+      const isUnauthorized = status === 401;
+
+      const message = isUnauthorized
+        ? 'You must sign in before creating an asset. The API rejected this request with 401.'
+        : (error as Error)?.message || 'There was an error submitting your asset. Please try again.';
+
+      setSubmitError(isUnauthorized ? `401 Unauthorized — ${message}` : message);
+
+      toast.error(isUnauthorized ? '401 Unauthorized — sign in first' : 'Failed to upload asset', {
         id: 'ipfs-upload'
       });
 
       addNotification({
         type: 'error',
-        title: 'Submission Failed',
-        message: 'There was an error submitting your asset. Please try again.',
+        title: isUnauthorized ? 'Not signed in (401)' : 'Submission Failed',
+        message,
       });
     }
   };
@@ -190,6 +209,27 @@ export default function TokenizePage() {
             ? 'Uploads go to Pinata IPFS. Deploy contracts (`npm run deploy:local`) to verify Solidity in this page.'
             : 'Demo mode until you run `npm run chain` and `npm run deploy:local`. Then refresh and submit again to verify on-chain.'}
         </p>
+
+        {/* API identity state: create-asset is a protected route. */}
+        <div
+          data-testid="api-auth-status"
+          className={`mb-4 text-sm rounded-lg px-4 py-3 ${
+            hasApiToken ? 'bg-green-50 text-green-800' : 'bg-amber-50 text-amber-800'
+          }`}
+        >
+          {hasApiToken
+            ? 'Signed in to the API. POST /api/assets will set the owner from your JWT.'
+            : 'Not signed in to the API. POST /api/assets will reject this with 401 — sign in first.'}
+        </div>
+
+        {submitError && (
+          <div
+            data-testid="submit-error"
+            className="mb-4 text-sm rounded-lg px-4 py-3 bg-red-50 text-red-800 border border-red-200"
+          >
+            {submitError}
+          </div>
+        )}
 
         {/* Progress Steps */}
         <div className="flex justify-between mb-12">

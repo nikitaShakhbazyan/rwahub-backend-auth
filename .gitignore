@@ -8,6 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # Local secrets — keep example.env, never commit .env
+.env
 .env.local
 .env.*.local
 

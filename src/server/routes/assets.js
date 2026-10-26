@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../models/database');
 const { validateAssetUpdate } = require('../middleware/validation');
-const { authenticateToken, optionalAuth } = require('../middleware/auth');
+const { authenticateToken } = require('../middleware/auth');
 const { testConfig } = require('../config');
 
 // Get all assets with optional filters
@@ -83,16 +83,42 @@ router.get('/:id', (req, res) => {
 });
 
 // Create new asset
-router.post('/', optionalAuth, (req, res) => {
+/**
+ * Create an asset.
+ *
+ * Authentication is mandatory: `authenticateToken` rejects guests with 401
+ * before this handler runs, so `req.user` is always present below.
+ *
+ * Ownership comes from `req.user` and nothing else. Any `owner` / `ownerId`
+ * in the request body is deliberately ignored — accepting it would let a
+ * caller mint assets under someone else's name.
+ */
+router.post('/', authenticateToken, (req, res) => {
   try {
     const title = String(req.body.title || '').trim();
     const description = String(req.body.description || '').trim();
     const priceAmount = Number(req.body.price?.amount ?? req.body.value ?? 0);
-    if (title.length < 3 || description.length < 10 || !Number.isFinite(priceAmount) || priceAmount <= 0) {
-      return res.status(400).json({ error: 'Valid title, description, and price are required' });
+
+    const details = [];
+    if (title.length < 3) {
+      details.push('title must be at least 3 characters');
+    }
+    if (description.length < 10) {
+      details.push('description must be at least 10 characters');
+    }
+    if (!Number.isFinite(priceAmount) || priceAmount <= 0) {
+      details.push('price.amount must be a positive number');
+    }
+    if (details.length) {
+      return res.status(400).json({
+        error: 'Validation error',
+        code: 'VALIDATION_ERROR',
+        details
+      });
     }
 
-    const ownerId = req.user?.userId || req.body.owner?.id || 'guest';
+    const owner = db.getUserById(req.user.userId);
+    const ownerId = req.user.userId;
     const imageUrl = req.body.imageUrl || req.body.images?.[0] || '';
     const asset = db.createAsset({
       title,
@@ -111,13 +137,20 @@ router.post('/', optionalAuth, (req, res) => {
         pricePerToken: priceAmount
       },
       listingType: req.body.listingType || 'fixed',
-      owner: req.body.owner || {
+      // Server-assigned identity, never the request body.
+      owner: {
         id: ownerId,
-        name: req.user?.email || 'Guest'
+        name: (owner && (owner.name || owner.email))
+          || req.user.email
+          || req.user.walletAddress
+          || 'Unnamed user',
+        walletAddress: req.user.walletAddress || null
       },
       ownerId,
-      status: req.body.status || 'pending',
-      isVerified: Boolean(req.body.isVerified),
+      // A freshly created asset is always unverified and pending; a client
+      // cannot self-certify by posting status/isVerified.
+      status: 'pending',
+      isVerified: false,
       tokenId: req.body.tokenId,
       value: priceAmount
     });

@@ -1,7 +1,18 @@
 const rateLimit = require('express-rate-limit');
 
+/**
+ * Rate limiting is real behaviour we want in dev and production, but it makes
+ * the auth suite flaky: those tests deliberately make many failing attempts and
+ * would trip the limiter rather than assert the status code under test.
+ * Under NODE_ENV=test the limiters become pass-through.
+ */
+const isTestEnv = () => process.env.NODE_ENV === 'test';
+
+const buildLimiter = (options) =>
+  isTestEnv() ? (req, res, next) => next() : rateLimit(options);
+
 // General rate limiter
-const generalLimiter = rateLimit({
+const generalLimiter = buildLimiter({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // limit each IP to 100 requests per windowMs
   message: {
@@ -22,7 +33,7 @@ const generalLimiter = rateLimit({
 
 
 // Strict rate limiter for auth endpoints
-const authLimiter = rateLimit({
+const authLimiter = buildLimiter({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5, // limit each IP to 5 requests per windowMs
   message: {
@@ -41,7 +52,7 @@ const authLimiter = rateLimit({
 });
 
 // File upload rate limiter
-const uploadLimiter = rateLimit({
+const uploadLimiter = buildLimiter({
   windowMs: 60 * 1000, // 1 minute
   max: 10, // limit each IP to 10 uploads per minute
   message: {
@@ -59,7 +70,7 @@ const uploadLimiter = rateLimit({
 });
 
 // API rate limiter
-const apiLimiter = rateLimit({
+const apiLimiter = buildLimiter({
   windowMs: 60 * 1000, // 1 minute
   max: 60, // limit each IP to 60 requests per minute
   message: {
@@ -90,7 +101,7 @@ const dynamicLimiter = (req, res, next) => {
     return next();
   }
   
-  const limiter = rateLimit({
+  const limiter = buildLimiter({
     windowMs: 15 * 60 * 1000,
     max: maxRequests,
     message: {

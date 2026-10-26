@@ -50,7 +50,7 @@ interface MockDataStore {
   getTotalValue: () => number;
   fetchAssets: () => Promise<void>;
   loadMoreAssets: () => Promise<void>;
-  addAsset: (asset: Asset) => void;
+  addAsset: (asset: Asset) => Promise<Asset>;
   filterAssets: (category?: AssetType, priceRange?: [number, number], verifiedOnly?: boolean) => Asset[];
   searchAssets: (query: string) => Asset[];
 }
@@ -404,17 +404,27 @@ export const useMockDataStore = create<MockDataStore>()((set, get) => ({
     return assetsRequest;
   },
 
-  addAsset: (asset) => {
+  /**
+   * Optimistically inserts the asset, then persists it through the API.
+   *
+   * The promise is returned (and rejections are no longer swallowed) so the
+   * page can show what the server said — a 401 for a guest in particular.
+   * On failure the optimistic row is rolled back, otherwise the UI would keep
+   * showing an asset the server refused to create.
+   */
+  addAsset: async (asset) => {
     set((state) => ({ assets: [asset, ...state.assets] }));
-    createAssetOnApi(asset)
-      .then((created) => {
-        set((state) => ({
-          assets: state.assets.map((item) => (item.id === asset.id ? created : item)),
-        }));
-      })
-      .catch((error) => {
-        console.error('Failed to save asset to API:', error);
-      });
+
+    try {
+      const created = await createAssetOnApi(asset);
+      set((state) => ({
+        assets: state.assets.map((item) => (item.id === asset.id ? created : item)),
+      }));
+      return created;
+    } catch (error) {
+      set((state) => ({ assets: state.assets.filter((item) => item.id !== asset.id) }));
+      throw error;
+    }
   },
 
   getFilteredAssets: () => {

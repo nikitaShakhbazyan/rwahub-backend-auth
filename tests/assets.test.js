@@ -1,5 +1,14 @@
 const request = require('supertest');
 const app = require('../src/server/server');
+const { issueToken } = require('../src/server/services/identity');
+
+// POST /api/assets is authenticated, so asset-creation tests need a caller.
+const testUser = {
+  id: 'test_owner_1',
+  email: 'owner@example.com',
+  roles: ['buyer', 'seller'],
+};
+const authHeader = `Bearer ${issueToken(testUser)}`;
 
 describe('Asset API Endpoints', () => {
   // Test GET /api/assets
@@ -120,6 +129,7 @@ describe('Asset API Endpoints', () => {
     it('should create new asset with valid data', async () => {
       const res = await request(app)
         .post('/api/assets')
+        .set('Authorization', authHeader)
         .send(validAssetData)
         .expect(201);
 
@@ -137,8 +147,48 @@ describe('Asset API Endpoints', () => {
 
       await request(app)
         .post('/api/assets')
+        .set('Authorization', authHeader)
         .send(invalidData)
         .expect(400);
+    });
+
+    it('should return 401 for a guest with no token', async () => {
+      const res = await request(app)
+        .post('/api/assets')
+        .send(validAssetData)
+        .expect(401);
+
+      expect(res.body).toHaveProperty('code', 'AUTH_REQUIRED');
+    });
+
+    it('should return 401 for an invalid token', async () => {
+      const res = await request(app)
+        .post('/api/assets')
+        .set('Authorization', 'Bearer not.a.real.token')
+        .send(validAssetData)
+        .expect(401);
+
+      expect(res.body).toHaveProperty('code', 'TOKEN_INVALID');
+    });
+
+    it('assigns ownership from req.user and ignores owner in the body', async () => {
+      const res = await request(app)
+        .post('/api/assets')
+        .set('Authorization', authHeader)
+        .send({
+          ...validAssetData,
+          owner: { id: 'attacker', name: 'Spoofed Owner' },
+          ownerId: 'attacker',
+          status: 'validated',
+          isVerified: true,
+        })
+        .expect(201);
+
+      expect(res.body.ownerId).toBe(testUser.id);
+      expect(res.body.owner.id).toBe(testUser.id);
+      // A client cannot self-certify a new asset.
+      expect(res.body.status).toBe('pending');
+      expect(res.body.isVerified).toBe(false);
     });
 
     it('should return 400 for invalid category', async () => {
@@ -149,6 +199,7 @@ describe('Asset API Endpoints', () => {
 
       await request(app)
         .post('/api/assets')
+        .set('Authorization', authHeader)
         .send(invalidData)
         .expect(400);
     });
@@ -164,6 +215,7 @@ describe('Asset API Endpoints', () => {
 
       await request(app)
         .post('/api/assets')
+        .set('Authorization', authHeader)
         .send(invalidData)
         .expect(400);
     });

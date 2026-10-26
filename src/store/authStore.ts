@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { ethers } from 'ethers';
 import deployed from '@/config/contracts.json';
+import { signInWithWallet, signInWithPassword } from '@/utils/apiAuth';
+import { clearApiToken, getApiToken } from '@/utils/authToken';
 
 const PHAROS_DEVNET_CHAIN_ID = 50002;
 const PHAROS_DEVNET_HEX_CHAIN_ID = ethers.utils.hexValue(PHAROS_DEVNET_CHAIN_ID);
@@ -260,23 +262,6 @@ interface AuthState {
   clearError: () => void; // Added clearError to the interface
 }
 
-const mockUsers = [
-  {
-    id: '1',
-    email: 'demo@example.com',
-    password: 'password123',
-    name: 'Demo User',
-    roles: {
-      isBuyer: true,
-      isSeller: false,
-    },
-    stats: {
-      totalPurchases: 0,
-      totalSales: 0,
-    },
-  },
-];
-
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
@@ -288,20 +273,28 @@ export const useAuthStore = create<AuthState>()(
       openAuthModal: () => set({ authModalOpen: true, error: null }),
       closeAuthModal: () => set({ authModalOpen: false }),
 
+      /**
+       * Signs in against /api/auth/login and stores the returned JWT.
+       * Previously this compared credentials against an in-file array, so the
+       * client believed it was signed in while the API had no idea who it was.
+       */
       login: async (email: string, password: string) => {
         try {
           set({ loading: true, error: null });
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-          const user = mockUsers.find(
-            (u) => u.email === email && u.password === password
-          );
-          if (!user) {
-            throw new Error('Invalid email or password');
-          }
-          const { password: _, ...userData } = user;
+          const { user } = await signInWithPassword(email, password);
+
           set({
             isAuthenticated: true,
-            user: userData as User,
+            user: {
+              id: user.id,
+              email: user.email || undefined,
+              name: user.name,
+              roles: {
+                isBuyer: (user.roles || []).includes('buyer'),
+                isSeller: (user.roles || []).includes('seller'),
+              },
+              stats: { totalPurchases: 0, totalSales: 0 },
+            } as User,
             loading: false,
           });
         } catch (error) {
@@ -358,6 +351,7 @@ export const useAuthStore = create<AuthState>()(
               error: null,
               loading: false,
             });
+            clearApiToken();
             localStorage.removeItem('auth-storage');
             sessionStorage.clear();
             console.log('State cleared, redirecting to /');
@@ -463,12 +457,40 @@ export const useAuthStore = create<AuthState>()(
             chainId,
             balance: formattedBalance,
           };
+
+          /**
+           * Connecting a wallet is not the same as being signed in to the API.
+           * Exchange a signature for a JWT so the server knows who this is;
+           * the user id below is the server's, not a random client-side uuid.
+           */
+          let apiUserId: string | null = null;
+          let apiUserName: string | undefined;
+          let apiRoles: string[] = [];
+          try {
+            const signer = createWeb3Provider(ethereum).getSigner();
+            const { user: apiUser } = await signInWithWallet(address, (message: string) =>
+              signer.signMessage(message)
+            );
+            apiUserId = apiUser.id;
+            apiUserName = apiUser.name;
+            apiRoles = apiUser.roles || [];
+          } catch (signInError) {
+            // The wallet is still connected for on-chain use, but without a
+            // token the API will reject writes — say so rather than fail quietly.
+            clearApiToken();
+            console.error('Wallet API sign-in failed:', signInError);
+          }
+
           const nextUser: User = currentUser
-            ? { ...currentUser, wallet }
+            ? { ...currentUser, id: apiUserId || currentUser.id, wallet }
             : {
-                id: crypto.randomUUID(),
+                id: apiUserId || crypto.randomUUID(),
+                name: apiUserName,
                 wallet,
-                roles: { isBuyer: true, isSeller: false },
+                roles: {
+                  isBuyer: apiRoles.length ? apiRoles.includes('buyer') : true,
+                  isSeller: apiRoles.length ? apiRoles.includes('seller') : false,
+                },
                 stats: { totalPurchases: 0, totalSales: 0 },
               };
 
@@ -549,8 +571,9 @@ export const useAuthStore = create<AuthState>()(
             isAuthenticated: true,
             user: nextUser,
             loading: false,
-            error:
-              chainId === getTargetNetwork().chainId
+            error: !getApiToken()
+              ? 'Wallet connected, but API sign-in failed. Reconnect to create assets.'
+              : chainId === getTargetNetwork().chainId
                 ? null
                 : 'Wallet connected. Switch network to send transactions.',
           });
@@ -615,6 +638,7 @@ export const useAuthStore = create<AuthState>()(
             loading: false,
             error: null,
           });
+          clearApiToken();
           localStorage.removeItem('auth-storage');
           sessionStorage.clear();
           window.location.href = '/';
