@@ -158,11 +158,21 @@ function App() {
           } />
           
           {/* Dashboard layout routes */}
+          {/*
+            Asset Creation is reachable without signing in on purpose.
+            Authorization for creating an asset belongs to the API, not the
+            router: POST /api/assets rejects an unauthenticated request with
+            401, and the page surfaces that. Hiding the page behind a client
+            guard would only hide the gap this task is about.
+          */}
+          <Route element={<DashboardLayout />}>
+            <Route path="/asset-creation" element={<TokenizePage />} />
+          </Route>
+
           <Route element={<RequireAuth />}>
             <Route element={<DashboardLayout />}>
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/explorer" element={<AssetExplorerPage />} />
-              <Route path="/asset-creation" element={<TokenizePage />} />
               <Route path="/validators" element={<ValidatorsPage />} />
               <Route path="/profile" element={<ProfilePage />} />
               <Route path="/my-assets" element={<MyAssetsPage />} />
